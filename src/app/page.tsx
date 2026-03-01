@@ -13,6 +13,8 @@ function cn(...inputs: ClassValue[]) {
 interface ImageInfo {
   id: number;
   name: string;
+  width: number;
+  height: number;
   labelCounts: Record<string, number>;
   boxLabels: string[];
   boxIds: (number | null)[];
@@ -35,7 +37,7 @@ interface DuplicatePairDetail {
   frameId: number;
   boxIdA: number | string;
   boxIdB: number | string;
-  overlapPercent: "100%" | "99.9%" | "99%" | "Slight Deviation" | "Edge Deviation";
+  overlapPercent: string;
 }
 
 export default function BoxCounterPage() {
@@ -61,8 +63,8 @@ export default function BoxCounterPage() {
     lastBoxId: number | string;
     totalFrames: number;
     duplicateExact100Count: number;
-    duplicateStrictCount: number; // Lệch rất ít (<= 2px hoặc <= 1%)
-    duplicateLooseCount: number; // Lệch vừa ({<= 5px hoặc <= 2%})
+    duplicateStrictCount: number; // Trùng 99%
+    duplicateLooseCount: number; // Nghi ngờ trùng (95% - 98%)
   } | null>(null);
 
   const [labelDetails, setLabelDetails] = useState<{ label: string; total: number }[]>([]);
@@ -306,6 +308,8 @@ export default function BoxCounterPage() {
       return {
         id: parseInt(img.getAttribute("id") || String(imgIdx), 10),
         name: img.getAttribute("name") || "",
+        width: parseFloat(img.getAttribute("width") || "0"),
+        height: parseFloat(img.getAttribute("height") || "0"),
         labelCounts: counts,
         boxLabels,
         boxIds: boxIds,
@@ -466,9 +470,9 @@ export default function BoxCounterPage() {
           const boxIdB = img.boxIds[secondIdx] ?? `index:${secondIdx + 1}`;
           const labelA = String(img.boxLabels[firstIdx] || "").trim().toLowerCase();
           const labelB = String(img.boxLabels[secondIdx] || "").trim().toLowerCase();
-          const isSameLabel = labelA === labelB;
           const iou = calculateIou(first, second);
 
+          // 1. Trùng 100% (cùng tọa độ tuyệt đối)
           if (isSameCoordinates(first, second)) {
             duplicateExact100Count++;
             duplicatePairs.push({
@@ -480,53 +484,38 @@ export default function BoxCounterPage() {
             continue;
           }
 
-          // Box khác label chỉ tính trùng khi gần như khớp tuyệt đối (>= 99.9% IoU)
-          if (!isSameLabel) {
-            if (iou >= 0.999) {
-              duplicateStrictCount++;
-              duplicatePairs.push({
-                frameId: img.id,
-                boxIdA,
-                boxIdB,
-                overlapPercent: "99.9%",
-              });
-            } else if (iou >= 0.99) {
-              duplicateLooseCount++;
-              duplicatePairs.push({
-                frameId: img.id,
-                boxIdA,
-                boxIdB,
-                overlapPercent: "99%",
-              });
-            }
-            continue;
-          }
-
-          // Cùng label nhưng không chồng lấp đáng kể thì không tính trùng
-          if (iou < 0.9) {
-            continue;
-          }
-
-          // Kiểm tra lệch rất ít (Ngưỡng Strict: <= 2px || <= 1%, IoU >= 99%)
-          if (iou >= 0.99 && isApproximateSameBox(first, second, 2, 0.01)) {
+          // 2. Trùng >= 99%
+          if (iou >= 0.99) {
             duplicateStrictCount++;
             duplicatePairs.push({
               frameId: img.id,
               boxIdA,
               boxIdB,
-              overlapPercent: "Slight Deviation",
+              overlapPercent: "99%",
             });
             continue;
           }
 
-          // Kiểm tra lệch vừa, mắt thường (Ngưỡng Loose: <= 5px || <= 2%, IoU >= 95%)
-          if (iou >= 0.95 && isApproximateSameBox(first, second, 5, 0.02)) {
+          // Kiểm tra trùng 100% ít nhất 1 cạnh, NHƯNG BỎ QUA nếu cạnh đó đang chạm sát viền của ảnh
+          const isAtLeftBorder = first.xtl <= 1e-6 || second.xtl <= 1e-6;
+          const isAtTopBorder = first.ytl <= 1e-6 || second.ytl <= 1e-6;
+          const isAtRightBorder = Math.abs(first.xbr - img.width) <= 1e-6 || Math.abs(second.xbr - img.width) <= 1e-6;
+          const isAtBottomBorder = Math.abs(first.ybr - img.height) <= 1e-6 || Math.abs(second.ybr - img.height) <= 1e-6;
+
+          const hasMatchingBound =
+            (!isAtLeftBorder && Math.abs(first.xtl - second.xtl) <= 1e-6) ||
+            (!isAtTopBorder && Math.abs(first.ytl - second.ytl) <= 1e-6) ||
+            (!isAtRightBorder && Math.abs(first.xbr - second.xbr) <= 1e-6) ||
+            (!isAtBottomBorder && Math.abs(first.ybr - second.ybr) <= 1e-6);
+
+          // 3. Cần kiểm tra (Từ 95% đến 98.9% HOẶC trùng hoàn toàn >= 1 cạnh không nằm ranh giới)
+          if (iou >= 0.95 || (iou > 0 && hasMatchingBound)) {
             duplicateLooseCount++;
             duplicatePairs.push({
               frameId: img.id,
               boxIdA,
               boxIdB,
-              overlapPercent: "Edge Deviation",
+              overlapPercent: "check",
             });
           }
         }
