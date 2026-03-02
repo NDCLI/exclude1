@@ -40,6 +40,8 @@ interface DuplicatePairDetail {
   overlapPercent: string;
 }
 
+
+
 export default function BoxCounterPage() {
   const [currentXmlData, setCurrentXmlData] = useState<XmlData | null>(null);
   const [loading, setLoading] = useState(false);
@@ -496,20 +498,8 @@ export default function BoxCounterPage() {
             continue;
           }
 
-          // Kiểm tra trùng 100% ít nhất 1 cạnh, NHƯNG BỎ QUA nếu cạnh đó đang chạm sát viền của ảnh
-          const isAtLeftBorder = first.xtl <= 1e-6 || second.xtl <= 1e-6;
-          const isAtTopBorder = first.ytl <= 1e-6 || second.ytl <= 1e-6;
-          const isAtRightBorder = Math.abs(first.xbr - img.width) <= 1e-6 || Math.abs(second.xbr - img.width) <= 1e-6;
-          const isAtBottomBorder = Math.abs(first.ybr - img.height) <= 1e-6 || Math.abs(second.ybr - img.height) <= 1e-6;
-
-          const hasMatchingBound =
-            (!isAtLeftBorder && Math.abs(first.xtl - second.xtl) <= 1e-6) ||
-            (!isAtTopBorder && Math.abs(first.ytl - second.ytl) <= 1e-6) ||
-            (!isAtRightBorder && Math.abs(first.xbr - second.xbr) <= 1e-6) ||
-            (!isAtBottomBorder && Math.abs(first.ybr - second.ybr) <= 1e-6);
-
-          // 3. Cần kiểm tra (Từ 95% đến 98.9% HOẶC trùng hoàn toàn >= 1 cạnh không nằm ranh giới)
-          if (iou >= 0.95 || (iou > 0 && hasMatchingBound)) {
+          // 3. Nghi ngờ trùng (IoU từ 97% đến 98.9%)
+          if (iou >= 0.97) {
             duplicateLooseCount++;
             duplicatePairs.push({
               frameId: img.id,
