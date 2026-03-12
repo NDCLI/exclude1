@@ -65,8 +65,6 @@ export default function BoxCounterPage() {
     lastBoxId: number | string;
     totalFrames: number;
     duplicateExact100Count: number;
-    duplicateStrictCount: number; // Trùng 99%
-    duplicateLooseCount: number; // Nghi ngờ trùng (95% - 98%)
   } | null>(null);
 
   const [labelDetails, setLabelDetails] = useState<{ label: string; total: number }[]>([]);
@@ -128,70 +126,6 @@ export default function BoxCounterPage() {
     if (!val && val !== 0) return false;
     const t = String(val).trim().toLowerCase();
     return t === "true" || t === "1" || t === "yes" || t === "y" || t === "on";
-  };
-
-  const calculateIou = (
-    a: { xtl: number; ytl: number; xbr: number; ybr: number },
-    b: { xtl: number; ytl: number; xbr: number; ybr: number }
-  ) => {
-    const interLeft = Math.max(a.xtl, b.xtl);
-    const interTop = Math.max(a.ytl, b.ytl);
-    const interRight = Math.min(a.xbr, b.xbr);
-    const interBottom = Math.min(a.ybr, b.ybr);
-
-    const interWidth = Math.max(0, interRight - interLeft);
-    const interHeight = Math.max(0, interBottom - interTop);
-    const interArea = interWidth * interHeight;
-
-    const areaA = Math.max(0, a.xbr - a.xtl) * Math.max(0, a.ybr - a.ytl);
-    const areaB = Math.max(0, b.xbr - b.xtl) * Math.max(0, b.ybr - b.ytl);
-    const unionArea = areaA + areaB - interArea;
-
-    if (unionArea <= 0) return 0;
-    return interArea / unionArea;
-  };
-
-  const isApproximateSameBox = (
-    a: { xtl: number; ytl: number; xbr: number; ybr: number },
-    b: { xtl: number; ytl: number; xbr: number; ybr: number },
-    pixelTolerance: number = 3,
-    percentTolerance: number = 0.015 // 1.5%
-  ) => {
-    // 1. Độ lệch tuyệt đối (Pixel)
-    const diffXTL = Math.abs(a.xtl - b.xtl);
-    const diffYTL = Math.abs(a.ytl - b.ytl);
-    const diffXBR = Math.abs(a.xbr - b.xbr);
-    const diffYBR = Math.abs(a.ybr - b.ybr);
-
-    const isMatchByPixel =
-      diffXTL <= pixelTolerance &&
-      diffYTL <= pixelTolerance &&
-      diffXBR <= pixelTolerance &&
-      diffYBR <= pixelTolerance;
-
-    if (isMatchByPixel) return true;
-
-    // 2. Độ lệch tương đối (Relative / Percent)
-    // Dùng cho ảnh rất lớn, lệch 5px vẫn là rất nhỏ
-    const widthA = a.xbr - a.xtl;
-    const heightA = a.ybr - a.ytl;
-
-    // Nếu box quá nhỏ (width/height = 0), tránh chia cho 0
-    if (widthA <= 0 || heightA <= 0) return false;
-
-    // Tính % lệch dựa trên kích thước của Box A
-    const pctXTL = diffXTL / widthA;
-    const pctYTL = diffYTL / heightA;
-    const pctXBR = diffXBR / widthA;
-    const pctYBR = diffYBR / heightA;
-
-    const isMatchByPercent =
-      pctXTL <= percentTolerance &&
-      pctYTL <= percentTolerance &&
-      pctXBR <= percentTolerance &&
-      pctYBR <= percentTolerance;
-
-    return isMatchByPercent;
   };
 
   const isSameCoordinates = (
@@ -449,8 +383,6 @@ export default function BoxCounterPage() {
     const lastBoxId = allBoxIds.length > 0 ? Math.max(...allBoxIds) : "—";
 
     let duplicateExact100Count = 0;
-    let duplicateStrictCount = 0;
-    let duplicateLooseCount = 0;
     const duplicatePairs: DuplicatePairDetail[] = [];
 
     filteredImages.forEach((img) => {
@@ -470,11 +402,8 @@ export default function BoxCounterPage() {
           const secondIdx = validBoxes[j].idx;
           const boxIdA = img.boxIds[firstIdx] ?? `index:${firstIdx + 1}`;
           const boxIdB = img.boxIds[secondIdx] ?? `index:${secondIdx + 1}`;
-          const labelA = String(img.boxLabels[firstIdx] || "").trim().toLowerCase();
-          const labelB = String(img.boxLabels[secondIdx] || "").trim().toLowerCase();
-          const iou = calculateIou(first, second);
 
-          // 1. Trùng 100% (cùng tọa độ tuyệt đối)
+          // Chỉ giữ box trùng 100% (cùng tọa độ tuyệt đối)
           if (isSameCoordinates(first, second)) {
             duplicateExact100Count++;
             duplicatePairs.push({
@@ -482,30 +411,6 @@ export default function BoxCounterPage() {
               boxIdA,
               boxIdB,
               overlapPercent: "100%",
-            });
-            continue;
-          }
-
-          // 2. Trùng >= 99%
-          if (iou >= 0.99) {
-            duplicateStrictCount++;
-            duplicatePairs.push({
-              frameId: img.id,
-              boxIdA,
-              boxIdB,
-              overlapPercent: "99%",
-            });
-            continue;
-          }
-
-          // 3. Nghi ngờ trùng (IoU từ 97% đến 98.9%)
-          if (iou >= 0.97) {
-            duplicateLooseCount++;
-            duplicatePairs.push({
-              frameId: img.id,
-              boxIdA,
-              boxIdB,
-              overlapPercent: "check",
             });
           }
         }
@@ -521,8 +426,6 @@ export default function BoxCounterPage() {
       lastBoxId,
       totalFrames: filteredImages.length, // Only frames in range
       duplicateExact100Count,
-      duplicateStrictCount,
-      duplicateLooseCount,
     });
     setDuplicateDetails(duplicatePairs);
 
@@ -797,13 +700,13 @@ export default function BoxCounterPage() {
                         </div>
                       )}
 
-                      {(results.duplicateExact100Count > 0 || results.duplicateStrictCount > 0 || results.duplicateLooseCount > 0) && (
+                      {results.duplicateExact100Count > 0 && (
                         <div className="col-span-2 flex items-center justify-between p-3 rounded-lg bg-orange-500/10 border border-orange-500/20 text-orange-200 mb-2 shadow-inner">
                           <span className="font-medium flex items-center gap-2">
                             <AlertCircle className="w-4 h-4" />
                             Duplicate Boxes
                           </span>
-                          <span className="font-bold text-lg">{results.duplicateExact100Count + results.duplicateStrictCount + results.duplicateLooseCount}</span>
+                          <span className="font-bold text-lg">{results.duplicateExact100Count}</span>
                         </div>
                       )}
 
@@ -841,12 +744,7 @@ export default function BoxCounterPage() {
                               <span className="text-secondary"> vs </span>
                               <span className="font-mono text-white">{item.boxIdB}</span>
                               <span className="text-secondary"> • </span>
-                              <span className={cn(
-                                "font-semibold",
-                                item.overlapPercent === "100%"
-                                  ? "text-red-500 dark:text-red-400"
-                                  : "text-orange-500 dark:text-orange-400"
-                              )}>
+                              <span className="font-semibold text-red-500 dark:text-red-400">
                                 {item.overlapPercent}
                               </span>
                             </div>
