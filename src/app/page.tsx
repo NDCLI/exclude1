@@ -492,7 +492,7 @@ export default function BoxCounterPage() {
             <p className="text-sm text-secondary font-medium tracking-wide mb-4">
               Advanced tool to count items and filtered statistics from CVAT labels.
             </p>
-            <div className="flex gap-3 justify-center flex-wrap">
+            <div className="flex gap-3 justify-center flex-wrap items-center">
               <a
                 href="https://nkhcloud.github.io/label/"
                 target="_blank"
