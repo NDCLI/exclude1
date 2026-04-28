@@ -492,24 +492,7 @@ export default function BoxCounterPage() {
             <p className="text-sm text-secondary font-medium tracking-wide mb-4">
               Advanced tool to count items and filtered statistics from CVAT labels.
             </p>
-            <div className="flex gap-3 justify-center flex-wrap items-center">
-              <a
-                href="https://nkhcloud.github.io/label/"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-2 px-4 py-2 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/20 rounded-lg font-medium text-sm transition-colors"
-              >
-                Attributes Checker
-              </a>
-              <a
-                href="https://ndcli.github.io/imageview/"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-2 px-4 py-2 bg-purple-500/10 hover:bg-purple-500/20 text-purple-400 border border-purple-500/20 rounded-lg font-medium text-sm transition-colors"
-              >
-                Image Viewer
-              </a>
-            </div>
+
           </div>
 
           {!fileName ? (
