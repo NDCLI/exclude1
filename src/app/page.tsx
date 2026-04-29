@@ -487,7 +487,7 @@ export default function BoxCounterPage() {
         )}>
           <div className="text-center mb-8 mt-2">
             <h1 className="text-4xl font-extrabold tracking-tight mb-3">
-              <span className="text-gradient">Annotation</span><span className={theme === "neon" ? "text-gradient-accent ml-2" : "text-blue-400 ml-2"}>Counter</span>
+              <span className="text-gradient">Annotations</span><span className={theme === "neon" ? "text-gradient-accent ml-2" : "text-blue-400 ml-2"}>Counter</span>
             </h1>
             <p className="text-sm text-secondary font-medium tracking-wide mb-4">
               Advanced tool to count items and filtered statistics from CVAT labels.
