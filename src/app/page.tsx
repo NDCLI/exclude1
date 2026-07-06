@@ -385,6 +385,7 @@ export default function BoxCounterPage() {
 
     let duplicateCount = 0;
     const duplicatePairs: DuplicatePairDetail[] = [];
+    const seenSameLabelGroups = new Set<string>();
 
     filteredImages.forEach((img) => {
       const validBoxes = img.boxCoords
@@ -406,16 +407,22 @@ export default function BoxCounterPage() {
           const labelA = img.boxLabels[firstIdx] || "unknown";
           const labelB = img.boxLabels[secondIdx] || "unknown";
 
-          if (isSameCoordinates(first, second)) {
-            duplicateCount++;
-            duplicatePairs.push({
-              frameId: img.id,
-              boxIdA,
-              boxIdB,
-              labelA,
-              labelB,
-            });
+          if (!isSameCoordinates(first, second)) continue;
+
+          if (labelA === labelB) {
+            const groupKey = `${img.id}|${labelA}|${first.xtl}|${first.ytl}|${first.xbr}|${first.ybr}`;
+            if (seenSameLabelGroups.has(groupKey)) continue;
+            seenSameLabelGroups.add(groupKey);
           }
+
+          duplicateCount++;
+          duplicatePairs.push({
+            frameId: img.id,
+            boxIdA,
+            boxIdB,
+            labelA,
+            labelB,
+          });
         }
       }
     });
@@ -744,9 +751,17 @@ export default function BoxCounterPage() {
                                 <span className="font-mono text-white">{item.boxIdB}</span>
                               </div>
                               <div className="mt-1 text-sm text-white/80">
-                                <span className="font-semibold">Label A:</span> {item.labelA || "unknown"}
-                                <span className="mx-2 text-secondary">•</span>
-                                <span className="font-semibold">Label B:</span> {item.labelB || "unknown"}
+                                {item.labelA === item.labelB ? (
+                                  <>
+                                    <span className="font-semibold">Label:</span> {item.labelA || "unknown"}
+                                  </>
+                                ) : (
+                                  <>
+                                    <span className="font-semibold">Label A:</span> {item.labelA || "unknown"}
+                                    <span className="mx-2 text-secondary">•</span>
+                                    <span className="font-semibold">Label B:</span> {item.labelB || "unknown"}
+                                  </>
+                                )}
                               </div>
                             </div>
                           ))}
