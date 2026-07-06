@@ -37,7 +37,8 @@ interface DuplicatePairDetail {
   frameId: number;
   boxIdA: number | string;
   boxIdB: number | string;
-  overlapPercent: string;
+  labelA: string;
+  labelB: string;
 }
 
 
@@ -64,7 +65,7 @@ export default function BoxCounterPage() {
     firstBoxId: number | string;
     lastBoxId: number | string;
     totalFrames: number;
-    duplicateExact100Count: number;
+    duplicateCount: number;
   } | null>(null);
 
   const [labelDetails, setLabelDetails] = useState<{ label: string; total: number }[]>([]);
@@ -382,7 +383,7 @@ export default function BoxCounterPage() {
     const firstBoxId = allBoxIds.length > 0 ? Math.min(...allBoxIds) : "—";
     const lastBoxId = allBoxIds.length > 0 ? Math.max(...allBoxIds) : "—";
 
-    let duplicateExact100Count = 0;
+    let duplicateCount = 0;
     const duplicatePairs: DuplicatePairDetail[] = [];
 
     filteredImages.forEach((img) => {
@@ -402,15 +403,17 @@ export default function BoxCounterPage() {
           const secondIdx = validBoxes[j].idx;
           const boxIdA = img.boxIds[firstIdx] ?? `index:${firstIdx + 1}`;
           const boxIdB = img.boxIds[secondIdx] ?? `index:${secondIdx + 1}`;
+          const labelA = img.boxLabels[firstIdx] || "unknown";
+          const labelB = img.boxLabels[secondIdx] || "unknown";
 
-          // Chỉ giữ box trùng 100% (cùng tọa độ tuyệt đối)
           if (isSameCoordinates(first, second)) {
-            duplicateExact100Count++;
+            duplicateCount++;
             duplicatePairs.push({
               frameId: img.id,
               boxIdA,
               boxIdB,
-              overlapPercent: "100%",
+              labelA,
+              labelB,
             });
           }
         }
@@ -425,7 +428,7 @@ export default function BoxCounterPage() {
       firstBoxId,
       lastBoxId,
       totalFrames: filteredImages.length, // Only frames in range
-      duplicateExact100Count,
+      duplicateCount,
     });
     setDuplicateDetails(duplicatePairs);
 
@@ -693,13 +696,13 @@ export default function BoxCounterPage() {
                         </div>
                       )}
 
-                      {results.duplicateExact100Count > 0 && (
+                      {results.duplicateCount > 0 && (
                         <div className="col-span-2 flex items-center justify-between p-3 rounded-lg bg-orange-500/10 border border-orange-500/20 text-orange-200 mb-2 shadow-inner">
                           <span className="font-medium flex items-center gap-2">
                             <AlertCircle className="w-4 h-4" />
                             Duplicate Boxes
                           </span>
-                          <span className="font-bold text-lg">{results.duplicateExact100Count}</span>
+                          <span className="font-bold text-lg">{results.duplicateCount}</span>
                         </div>
                       )}
 
@@ -731,15 +734,20 @@ export default function BoxCounterPage() {
                         <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
                           {duplicateDetails.map((item, idx) => (
                             <div key={`${item.frameId}-${item.boxIdA}-${item.boxIdB}-${idx}`} className="p-3 rounded-lg bg-white/5 border border-white/5 text-xs sm:text-sm text-zinc-200">
-                              Frame <span className="font-mono text-white">{item.frameId}</span>
-                              <span className="text-secondary"> • Box </span>
-                              <span className="font-mono text-white">{item.boxIdA}</span>
-                              <span className="text-secondary"> vs </span>
-                              <span className="font-mono text-white">{item.boxIdB}</span>
-                              <span className="text-secondary"> • </span>
-                              <span className="font-semibold text-red-500 dark:text-red-400">
-                                {item.overlapPercent}
-                              </span>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span>Frame</span>
+                                <span className="font-mono text-white">{item.frameId}</span>
+                                <span className="text-secondary">•</span>
+                                <span>Box</span>
+                                <span className="font-mono text-white">{item.boxIdA}</span>
+                                <span className="text-secondary">vs</span>
+                                <span className="font-mono text-white">{item.boxIdB}</span>
+                              </div>
+                              <div className="mt-1 text-sm text-white/80">
+                                <span className="font-semibold">Label A:</span> {item.labelA || "unknown"}
+                                <span className="mx-2 text-secondary">•</span>
+                                <span className="font-semibold">Label B:</span> {item.labelB || "unknown"}
+                              </div>
                             </div>
                           ))}
                         </div>
