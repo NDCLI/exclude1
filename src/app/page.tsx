@@ -142,7 +142,7 @@ export default function BoxCounterPage() {
     );
   };
 
-  const parseXML = (xmlContent: string) => {
+  const parseXmlContentToData = (xmlContent: string): XmlData => {
     const parser = new DOMParser();
     const xmlDoc = parser.parseFromString(xmlContent, "text/xml");
 
@@ -226,8 +226,6 @@ export default function BoxCounterPage() {
         if (!lbl) return;
         counts[lbl] = (counts[lbl] || 0) + 1;
 
-        const bid = boxIds[idx];
-
         if (lbl.toLowerCase().includes("skip")) {
           frameSkipBoxCount++;
         }
@@ -263,16 +261,64 @@ export default function BoxCounterPage() {
     const minFrame = ids.length ? Math.min(...ids) : 0;
     const maxFrame = ids.length ? Math.max(...ids) : 0;
 
-    const data: XmlData = {
+    return {
       labelHasAttributes,
       images: parsedImages,
       minFrame,
       maxFrame,
     };
+  };
 
+  const mergeXmlData = (dataList: XmlData[]): XmlData => {
+    const labelHasAttributes: Record<string, boolean> = {};
+    const imageMap = new Map<string, ImageInfo>();
+
+    dataList.forEach((data) => {
+      Object.entries(data.labelHasAttributes).forEach(([label, hasAttr]) => {
+        labelHasAttributes[label] = labelHasAttributes[label] || hasAttr;
+      });
+
+      data.images.forEach((img) => {
+        const key = `${img.id}|${img.name}`;
+        if (!imageMap.has(key)) {
+          imageMap.set(key, img);
+        }
+      });
+    });
+
+    const mergedImages = Array.from(imageMap.values()).sort((a, b) => a.id - b.id);
+    const ids = mergedImages.map((img) => img.id).filter((x) => !isNaN(x));
+    const minFrame = ids.length ? Math.min(...ids) : 0;
+    const maxFrame = ids.length ? Math.max(...ids) : 0;
+
+    return {
+      labelHasAttributes,
+      images: mergedImages,
+      minFrame,
+      maxFrame,
+    };
+  };
+
+  const parseXML = (xmlContent: string) => {
+    const data = parseXmlContentToData(xmlContent);
     setCurrentXmlData(data);
-    setStartFrame(minFrame);
-    setEndFrame(maxFrame);
+    setStartFrame(data.minFrame);
+    setEndFrame(data.maxFrame);
+    setResults(null);
+    setError(null);
+  };
+
+  const parseXMLFiles = (xmlContents: string[]) => {
+    const validContents = xmlContents.filter((content) => /<image[\s>]/i.test(content));
+    if (validContents.length === 0) {
+      throw new Error("No valid annotation XML files found in the ZIP archive.");
+    }
+
+    const dataList = validContents.map(parseXmlContentToData);
+    const mergedData = dataList.length === 1 ? dataList[0] : mergeXmlData(dataList);
+    setCurrentXmlData(mergedData);
+    setStartFrame(mergedData.minFrame);
+    setEndFrame(mergedData.maxFrame);
     setResults(null);
     setError(null);
   };
@@ -303,13 +349,15 @@ export default function BoxCounterPage() {
       reader.onload = (e) => {
         JSZip.loadAsync(e.target?.result as ArrayBuffer)
           .then((zip) => {
-            const xmlFile = zip.file("annotations.xml");
-            if (!xmlFile) {
-              setError("annotations.xml not found in the ZIP archive.");
+            const xmlFiles = zip.file(/\.xml$/i) || [];
+            if (xmlFiles.length === 0) {
+              setError("No XML file found in the ZIP archive.");
               setLoading(false);
               return;
             }
-            return xmlFile.async("text").then((content) => {
+
+            const preferredFile = xmlFiles.find((file) => /annotations\.xml$/i.test(file.name)) || xmlFiles[0];
+            return preferredFile.async("text").then((content) => {
               parseXML(content);
             });
           })
@@ -380,8 +428,8 @@ export default function BoxCounterPage() {
     }, 0);
 
     const allBoxIds = filteredImages.flatMap((f) => f.boxIds).filter((x) => x !== null) as number[];
-    const firstBoxId = allBoxIds.length > 0 ? Math.min(...allBoxIds) : "—";
-    const lastBoxId = allBoxIds.length > 0 ? Math.max(...allBoxIds) : "—";
+    const firstBoxId = allBoxIds.length > 0 ? allBoxIds.reduce((min, id) => (id < min ? id : min), allBoxIds[0]) : "—";
+    const lastBoxId = allBoxIds.length > 0 ? allBoxIds.reduce((max, id) => (id > max ? id : max), allBoxIds[0]) : "—";
 
     let duplicateCount = 0;
     const duplicatePairs: DuplicatePairDetail[] = [];
