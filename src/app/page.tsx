@@ -39,6 +39,9 @@ interface DuplicatePairDetail {
   boxIdB: number | string;
   labelA: string;
   labelB: string;
+  coords?: { xtl: number; ytl: number; xbr: number; ybr: number };
+  width?: number;
+  height?: number;
 }
 
 
@@ -55,7 +58,6 @@ export default function BoxCounterPage() {
   const [excludeLabels, setExcludeLabels] = useState<string[]>(["_corrupt"]);
   const [showExcludePanel, setShowExcludePanel] = useState(false);
   const [newExcludeLabel, setNewExcludeLabel] = useState("");
-  const [theme, setTheme] = useState<"neon" | "midnight">("neon");
 
   const [results, setResults] = useState<{
     excludeCount: number;
@@ -73,6 +75,7 @@ export default function BoxCounterPage() {
   const [duplicateDetails, setDuplicateDetails] = useState<DuplicatePairDetail[]>([]);
   const [showDetails, setShowDetails] = useState(false);
   const [showDuplicateDetails, setShowDuplicateDetails] = useState(false);
+  const [isOpenDuplicateModal, setIsOpenDuplicateModal] = useState(false);
 
   const preserveScrollAfterToggle = () => {
     const currentScrollY = window.scrollY;
@@ -86,6 +89,49 @@ export default function BoxCounterPage() {
   const handleToggleDuplicateDetails = () => {
     setShowDuplicateDetails((prev: boolean) => !prev);
     preserveScrollAfterToggle();
+  };
+
+  const handleOpenDuplicateModal = () => {
+    setIsOpenDuplicateModal(true);
+  };
+
+  const handleCloseDuplicateModal = () => {
+    setIsOpenDuplicateModal(false);
+  };
+
+  const getBoxPosition = (coords: { xtl: number; ytl: number; xbr: number; ybr: number }, width?: number, height?: number): string => {
+    const centerX = (coords.xtl + coords.xbr) / 2;
+    const centerY = (coords.ytl + coords.ybr) / 2;
+    
+    let posX = "";
+    let posY = "";
+    
+    if (width) {
+      const ratioX = centerX / width;
+      if (ratioX < 0.2) posX = "Trái";
+      else if (ratioX < 0.4) posX = "Gần trái";
+      else if (ratioX < 0.6) posX = "Giữa";
+      else if (ratioX < 0.8) posX = "Gần phải";
+      else posX = "Phải";
+    }
+    
+    if (height) {
+      const ratioY = centerY / height;
+      if (ratioY < 0.2) posY = "Trên";
+      else if (ratioY < 0.4) posY = "Gần trên";
+      else if (ratioY < 0.6) posY = "Giữa";
+      else if (ratioY < 0.8) posY = "Gần dưới";
+      else posY = "Dưới";
+    }
+    
+    if (posX && posY) {
+      if (posX === "Giữa" && posY === "Giữa") return "Trung tâm";
+      if (posX === "Giữa") return posY;
+      if (posY === "Giữa") return posX;
+      return `${posX} - ${posY}`;
+    }
+    
+    return posX || posY || "Trung tâm";
   };
 
   const handleToggleBreakdown = () => {
@@ -470,6 +516,9 @@ export default function BoxCounterPage() {
             boxIdB,
             labelA,
             labelB,
+            coords: first,
+            width: img.width,
+            height: img.height,
           });
         }
       }
@@ -517,35 +566,19 @@ export default function BoxCounterPage() {
   }, [currentXmlData, startFrame, endFrame, excludeLabels]);
 
   return (
-    <div className={cn(
-      "flex flex-col items-center justify-center min-h-screen py-16 px-4 transition-colors duration-500 relative",
-      theme === "midnight" ? "bg-[#020617]" : ""
-    )}>
-      {theme === "midnight" && (
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-[#0f172a] via-[#020617] to-black opacity-80 pointer-events-none" />
-      )}
+    <div className="flex flex-col items-center justify-center min-h-screen py-16 px-4 transition-colors duration-500 relative">
       <div className="w-full max-w-2xl relative z-10">
-        <button
-          onClick={() => setTheme(theme === "neon" ? "midnight" : "neon")}
-          className="fixed bottom-5 right-5 z-50 w-10 h-10 rounded-full bg-black/40 border border-white/15 flex items-center justify-center text-lg cursor-pointer hover:bg-white/10 hover:scale-110 transition-all shadow-lg backdrop-blur-md"
-          title={theme === "neon" ? "Midnight Ocean" : "Neon Glass"}
-        >
-          {theme === "neon" ? "🌙" : "✨"}
-        </button>
-
-        {theme === "neon" && (
-          <>
-            <div className="absolute -top-32 -left-32 w-64 h-64 bg-blue-600 rounded-full mix-blend-screen filter blur-[128px] opacity-40 pointer-events-none animate-pulse" />
-            <div className="absolute -bottom-32 -right-32 w-64 h-64 bg-purple-600 rounded-full mix-blend-screen filter blur-[128px] opacity-40 pointer-events-none animate-pulse" style={{ animationDelay: '1s' }} />
-          </>
-        )}
+        <>
+          <div className="absolute -top-32 -left-32 w-64 h-64 bg-blue-600 rounded-full mix-blend-screen filter blur-[128px] opacity-40 pointer-events-none animate-pulse" />
+          <div className="absolute -bottom-32 -right-32 w-64 h-64 bg-purple-600 rounded-full mix-blend-screen filter blur-[128px] opacity-40 pointer-events-none animate-pulse" style={{ animationDelay: '1s' }} />
+        </>
 
         <div className={cn(
           "p-8 sm:p-10 rounded-2xl relative z-10 transition-all duration-300 shadow-2xl glass-panel"
         )}>
           <div className="text-center mb-8 mt-2">
             <h1 className="text-4xl font-extrabold tracking-tight mb-3">
-              <span className="text-gradient">Annotations</span><span className={theme === "neon" ? "text-gradient-accent ml-2" : "text-blue-400 ml-2"}>Counter</span>
+              <span className="text-gradient">Annotations</span><span className="text-gradient-accent ml-2">Counter</span>
             </h1>
             <p className="text-sm text-secondary font-medium tracking-wide mb-4">
               Advanced tool to count items and filtered statistics from CVAT labels.
@@ -771,48 +804,101 @@ export default function BoxCounterPage() {
                       </div>
                     </div>
 
-                    <button
-                      onClick={handleToggleDuplicateDetails}
-                      className="group flex flex-col items-center justify-center w-full mb-4"
-                    >
-                      <div className="text-xs font-semibold uppercase tracking-widest text-secondary group-hover:text-white transition-colors flex items-center gap-2">
-                        {showDuplicateDetails ? "Hide Duplicate Box" : "View Duplicate Box"}
-                        <ChevronDown className={cn("w-4 h-4 transition-transform", showDuplicateDetails && "rotate-180")} />
-                      </div>
-                    </button>
+                    {duplicateDetails.length > 0 && (
+                      <button
+                        onClick={handleOpenDuplicateModal}
+                        className="w-full mb-4 px-4 py-3 bg-orange-500/10 hover:bg-orange-500/20 border border-orange-500/30 rounded-xl text-orange-300 font-semibold transition-colors text-sm uppercase tracking-widest"
+                      >
+                        View Duplicate Boxes ({duplicateDetails.length})
+                      </button>
+                    )}
 
-                    {showDuplicateDetails && duplicateDetails.length > 0 && (
-                      <div className="mb-6 p-4 rounded-xl bg-orange-500/5 border border-orange-500/10 animate-in slide-in-from-top-4 fade-in">
-                        <div className="text-xs font-semibold uppercase tracking-widest text-orange-300 mb-3">
-                          Duplicate Box
-                        </div>
-                        <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
-                          {duplicateDetails.map((item, idx) => (
-                            <div key={`${item.frameId}-${item.boxIdA}-${item.boxIdB}-${idx}`} className="p-3 rounded-lg bg-white/5 border border-white/5 text-xs sm:text-sm text-zinc-200">
-                              <div className="flex flex-wrap items-center gap-2">
-                                <span>Frame</span>
-                                <span className="font-mono text-white">{item.frameId}</span>
-                                <span className="text-secondary">•</span>
-                                <span>Box</span>
-                                <span className="font-mono text-white">{item.boxIdA}</span>
-                                <span className="text-secondary">vs</span>
-                                <span className="font-mono text-white">{item.boxIdB}</span>
-                              </div>
-                              <div className="mt-1 text-sm text-white/80">
-                                {item.labelA === item.labelB ? (
-                                  <>
-                                    <span className="font-semibold">Label:</span> {item.labelA || "unknown"}
-                                  </>
-                                ) : (
-                                  <>
-                                    <span className="font-semibold">Label A:</span> {item.labelA || "unknown"}
-                                    <span className="mx-2 text-secondary">•</span>
-                                    <span className="font-semibold">Label B:</span> {item.labelB || "unknown"}
-                                  </>
-                                )}
-                              </div>
+                    {isOpenDuplicateModal && duplicateDetails.length > 0 && (
+                      <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
+                        <div className="bg-gradient-to-br from-[#0f0f1f] to-[#1a1a2e] border border-white/10 rounded-2xl shadow-2xl max-w-2xl w-full max-h-[85vh] flex flex-col animate-in slide-in-from-bottom-4 fade-in">
+                          {/* Header */}
+                          <div className="flex items-center justify-between p-6 border-b border-white/10">
+                            <div className="flex items-center gap-3">
+                              <AlertCircle className="w-5 h-5 text-orange-400" />
+                              <h2 className="text-xl font-bold text-white">Duplicate Boxes</h2>
+                              <span className="ml-2 px-2.5 py-0.5 bg-orange-500/20 border border-orange-500/30 rounded-full text-sm font-semibold text-orange-300">
+                                {duplicateDetails.length} found
+                              </span>
                             </div>
-                          ))}
+                            <button
+                              onClick={handleCloseDuplicateModal}
+                              className="p-2 hover:bg-white/10 rounded-lg transition-colors"
+                              title="Close modal"
+                            >
+                              <svg className="w-5 h-5 text-zinc-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                              </svg>
+                            </button>
+                          </div>
+
+                          {/* Content */}
+                          <div className="overflow-y-auto flex-1">
+                            <div className="space-y-2 p-6">
+                              {duplicateDetails.map((item, idx) => (
+                                <div key={`${item.frameId}-${item.boxIdA}-${item.boxIdB}-${idx}`} className="p-4 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 hover:border-white/20 transition-all">
+                                  <div className="flex flex-wrap items-center gap-3 mb-2">
+                                    <span className="text-sm text-secondary font-medium">Frame</span>
+                                    <span className="px-2.5 py-1 rounded bg-blue-500/20 border border-blue-500/30 font-mono text-sm font-semibold text-blue-300">{item.frameId}</span>
+                                    <span className="text-secondary">•</span>
+                                    <span className="text-sm text-secondary font-medium">Box</span>
+                                    <span className="px-2.5 py-1 rounded bg-purple-500/20 border border-purple-500/30 font-mono text-sm font-semibold text-purple-300">{item.boxIdA}</span>
+                                    <span className="text-secondary font-semibold">vs</span>
+                                    <span className="px-2.5 py-1 rounded bg-purple-500/20 border border-purple-500/30 font-mono text-sm font-semibold text-purple-300">{item.boxIdB}</span>
+                                  </div>
+                                  <div className="text-sm text-white/80 space-y-2">
+                                    {item.labelA === item.labelB ? (
+                                      <div className="flex items-center gap-2">
+                                        <span className="font-semibold text-white">Label:</span>
+                                        <span className="px-2.5 py-1 rounded bg-orange-500/20 border border-orange-500/30 text-orange-300 font-medium">
+                                          {item.labelA || "unknown"}
+                                        </span>
+                                      </div>
+                                    ) : (
+                                      <div className="flex flex-wrap items-center gap-2">
+                                        <span className="font-semibold text-white">Label A:</span>
+                                        <span className="px-2.5 py-1 rounded bg-orange-500/20 border border-orange-500/30 text-orange-300 font-medium">
+                                          {item.labelA || "unknown"}
+                                        </span>
+                                        <span className="text-secondary">•</span>
+                                        <span className="font-semibold text-white">Label B:</span>
+                                        <span className="px-2.5 py-1 rounded bg-orange-500/20 border border-orange-500/30 text-orange-300 font-medium">
+                                          {item.labelB || "unknown"}
+                                        </span>
+                                      </div>
+                                    )}
+                                    {item.coords && (
+                                      <div className="flex flex-wrap items-center gap-2 pt-1">
+                                        <span className="font-semibold text-white text-xs">Vị trí:</span>
+                                        <span className="px-2.5 py-1 rounded bg-green-500/20 border border-green-500/30 text-green-300 font-medium text-xs">
+                                          {getBoxPosition(item.coords, item.width, item.height)}
+                                        </span>
+                                        <span className="text-secondary text-xs">•</span>
+                                        <span className="text-xs text-zinc-400 font-mono">
+                                          ({Math.round(item.coords.xtl)}, {Math.round(item.coords.ytl)}) - ({Math.round(item.coords.xbr)}, {Math.round(item.coords.ybr)})
+                                        </span>
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+
+                          {/* Footer */}
+                          <div className="flex items-center justify-between p-6 border-t border-white/10 bg-black/40">
+                            <p className="text-xs text-secondary">Showing {duplicateDetails.length} duplicate pair(s)</p>
+                            <button
+                              onClick={handleCloseDuplicateModal}
+                              className="px-6 py-2 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-lg transition-colors shadow-lg shadow-blue-500/20"
+                            >
+                              Close
+                            </button>
+                          </div>
                         </div>
                       </div>
                     )}
