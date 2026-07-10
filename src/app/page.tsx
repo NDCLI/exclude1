@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, DragEvent, ChangeEvent } from "react";
-import JSZip from "jszip";
+import { ZipReader, BlobReader, TextWriter } from "@zip.js/zip.js";
 import { UploadCloud, File, Trash2, Settings, ChevronDown, CheckCircle2, AlertCircle, Loader2 } from "lucide-react";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
@@ -391,28 +391,31 @@ export default function BoxCounterPage() {
       };
       reader.readAsText(file);
     } else if (name.endsWith(".zip")) {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        JSZip.loadAsync(e.target?.result as ArrayBuffer)
-          .then((zip) => {
-            const xmlFiles = zip.file(/\.xml$/i) || [];
-            if (xmlFiles.length === 0) {
-              setError("No XML file found in the ZIP archive.");
-              setLoading(false);
-              return;
-            }
+      (async () => {
+        try {
+          const zipFileReader = new BlobReader(file);
+          const zipReader = new ZipReader(zipFileReader);
+          const entries = await zipReader.getEntries();
+          const xmlFiles = entries.filter((e) => e.filename.match(/\.xml$/i) && !e.directory);
+          
+          if (xmlFiles.length === 0) {
+            setError("No XML file found in the ZIP archive.");
+            setLoading(false);
+            await zipReader.close();
+            return;
+          }
 
-            const preferredFile = xmlFiles.find((file) => /annotations\.xml$/i.test(file.name)) || xmlFiles[0];
-            return preferredFile.async("text").then((content) => {
-              parseXML(content);
-            });
-          })
-          .catch((err) => {
-            setError("Error extracting ZIP: " + err.message);
-          })
-          .finally(() => setLoading(false));
-      };
-      reader.readAsArrayBuffer(file);
+          const preferredFile = xmlFiles.find((e) => /annotations\.xml$/i.test(e.filename)) || xmlFiles[0];
+          const content = await (preferredFile as any).getData!(new TextWriter());
+          await zipReader.close();
+          
+          parseXML(content);
+        } catch (err: any) {
+          setError("Error extracting ZIP: " + err.message);
+        } finally {
+          setLoading(false);
+        }
+      })();
     } else {
       setError("Please select an .xml or .zip file.");
       setLoading(false);
