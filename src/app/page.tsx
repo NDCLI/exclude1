@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, DragEvent, ChangeEvent } from "react";
-import { ZipReader, BlobReader, TextWriter } from "@zip.js/zip.js";
+import JSZip from "jszip";
 import { UploadCloud, File, Trash2, Settings, ChevronDown, CheckCircle2, AlertCircle, Loader2 } from "lucide-react";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
@@ -26,11 +26,19 @@ interface ImageInfo {
   hasPass: boolean;
 }
 
+interface JobInfo {
+  id: number;
+  start: number;
+  stop: number;
+  url: string;
+}
+
 interface XmlData {
   minFrame: number;
   maxFrame: number;
   labelHasAttributes: Record<string, boolean>;
   images: ImageInfo[];
+  jobs: JobInfo[];
 }
 
 interface DuplicatePairDetail {
@@ -70,8 +78,6 @@ export default function BoxCounterPage() {
     duplicateCount: number;
   } | null>(null);
 
-  const [labelDetails, setLabelDetails] = useState<{ label: string; total: number }[]>([]);
-  const [noBoxFramesCount, setNoBoxFramesCount] = useState(0);
   const [duplicateDetails, setDuplicateDetails] = useState<DuplicatePairDetail[]>([]);
   const [showDetails, setShowDetails] = useState(false);
   const [showDuplicateDetails, setShowDuplicateDetails] = useState(false);
@@ -201,6 +207,23 @@ export default function BoxCounterPage() {
       throw new Error("No image tags found in the XML.");
     }
 
+    const jobs: JobInfo[] = [];
+    const segments = xmlDoc.getElementsByTagName("segment");
+    Array.from(segments).forEach(seg => {
+      const idEl = seg.getElementsByTagName("id")[0];
+      const startEl = seg.getElementsByTagName("start")[0];
+      const stopEl = seg.getElementsByTagName("stop")[0];
+      const urlEl = seg.getElementsByTagName("url")[0];
+      if (idEl && startEl && stopEl && urlEl) {
+        jobs.push({
+          id: parseInt(idEl.textContent || "0", 10),
+          start: parseInt(startEl.textContent || "0", 10),
+          stop: parseInt(stopEl.textContent || "0", 10),
+          url: urlEl.textContent || ""
+        });
+      }
+    });
+
     const labelDefs = Array.from(xmlDoc.getElementsByTagName("label"));
     const labelHasAttributes: Record<string, boolean> = {};
     const labelAttrNames: Record<string, string[]> = {};
@@ -312,12 +335,14 @@ export default function BoxCounterPage() {
       images: parsedImages,
       minFrame,
       maxFrame,
+      jobs,
     };
   };
 
   const mergeXmlData = (dataList: XmlData[]): XmlData => {
     const labelHasAttributes: Record<string, boolean> = {};
     const imageMap = new Map<string, ImageInfo>();
+    const jobMap = new Map<number, JobInfo>();
 
     dataList.forEach((data) => {
       Object.entries(data.labelHasAttributes).forEach(([label, hasAttr]) => {
@@ -330,9 +355,16 @@ export default function BoxCounterPage() {
           imageMap.set(key, img);
         }
       });
+
+      data.jobs?.forEach((job) => {
+        if (!jobMap.has(job.id)) {
+          jobMap.set(job.id, job);
+        }
+      });
     });
 
     const mergedImages = Array.from(imageMap.values()).sort((a, b) => a.id - b.id);
+    const mergedJobs = Array.from(jobMap.values()).sort((a, b) => a.id - b.id);
     const ids = mergedImages.map((img) => img.id).filter((x) => !isNaN(x));
     const minFrame = ids.length ? Math.min(...ids) : 0;
     const maxFrame = ids.length ? Math.max(...ids) : 0;
@@ -342,6 +374,7 @@ export default function BoxCounterPage() {
       images: mergedImages,
       minFrame,
       maxFrame,
+      jobs: mergedJobs,
     };
   };
 
@@ -391,31 +424,28 @@ export default function BoxCounterPage() {
       };
       reader.readAsText(file);
     } else if (name.endsWith(".zip")) {
-      (async () => {
-        try {
-          const zipFileReader = new BlobReader(file);
-          const zipReader = new ZipReader(zipFileReader);
-          const entries = await zipReader.getEntries();
-          const xmlFiles = entries.filter((e) => e.filename.match(/\.xml$/i) && !e.directory);
-          
-          if (xmlFiles.length === 0) {
-            setError("No XML file found in the ZIP archive.");
-            setLoading(false);
-            await zipReader.close();
-            return;
-          }
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        JSZip.loadAsync(e.target?.result as ArrayBuffer)
+          .then((zip) => {
+            const xmlFiles = zip.file(/\.xml$/i) || [];
+            if (xmlFiles.length === 0) {
+              setError("No XML file found in the ZIP archive.");
+              setLoading(false);
+              return;
+            }
 
-          const preferredFile = xmlFiles.find((e) => /annotations\.xml$/i.test(e.filename)) || xmlFiles[0];
-          const content = await (preferredFile as any).getData!(new TextWriter());
-          await zipReader.close();
-          
-          parseXML(content);
-        } catch (err: any) {
-          setError("Error extracting ZIP: " + err.message);
-        } finally {
-          setLoading(false);
-        }
-      })();
+            const preferredFile = xmlFiles.find((file) => /annotations\.xml$/i.test(file.name)) || xmlFiles[0];
+            return preferredFile.async("text").then((content) => {
+              parseXML(content);
+            });
+          })
+          .catch((err) => {
+            setError("Error extracting ZIP: " + err.message);
+          })
+          .finally(() => setLoading(false));
+      };
+      reader.readAsArrayBuffer(file);
     } else {
       setError("Please select an .xml or .zip file.");
       setLoading(false);
@@ -539,27 +569,6 @@ export default function BoxCounterPage() {
     });
     setDuplicateDetails(duplicatePairs);
 
-    const labelTotals: Record<string, number> = {};
-    const labelMissing: Record<string, number> = {};
-    const labelOver: Record<string, number> = {};
-
-    filteredImages.forEach((img) => {
-      Object.keys(img.labelCounts).forEach((lbl) => {
-        labelTotals[lbl] = (labelTotals[lbl] || 0) + img.labelCounts[lbl];
-      });
-    });
-
-    const detailsArr: { label: string; total: number }[] = [];
-    Object.keys(labelTotals)
-      .sort()
-      .forEach((label) => {
-        const total = labelTotals[label];
-        if (total === 0) return;
-        detailsArr.push({ label, total });
-      });
-
-    setLabelDetails(detailsArr);
-    setNoBoxFramesCount(filteredImages.filter((img) => img.totalBoxes === 0).length);
   };
 
   useEffect(() => {
@@ -570,7 +579,7 @@ export default function BoxCounterPage() {
 
   return (
     <div className="flex flex-col items-center justify-center min-h-screen py-16 px-4 transition-colors duration-500 relative">
-      <div className="w-full max-w-2xl relative z-10">
+      <div className="w-full max-w-5xl relative z-10">
         <>
           <div className="absolute -top-32 -left-32 w-64 h-64 bg-blue-600 rounded-full mix-blend-screen filter blur-[128px] opacity-40 pointer-events-none animate-pulse" />
           <div className="absolute -bottom-32 -right-32 w-64 h-64 bg-purple-600 rounded-full mix-blend-screen filter blur-[128px] opacity-40 pointer-events-none animate-pulse" style={{ animationDelay: '1s' }} />
@@ -607,37 +616,10 @@ export default function BoxCounterPage() {
                 <UploadCloud className={cn("w-8 h-8", dragover ? "text-blue-400" : "text-zinc-400")} />
               </div>
               <h3 className="text-lg font-semibold text-white mb-2">Upload file</h3>
-              <p className="text-secondary text-sm">kéo thả file <code className="text-white">.xml</code> hoặc <code className="text-white">.zip</code> chứa annotations</p>
+              <p className="text-secondary text-sm">kéo thả file <code className="text-white">.xml</code> hoặc <code className="text-white">.zip</code> chứa annotations</p>
               <input type="file" ref={fileInputRef} accept=".xml,.zip" className="hidden" onChange={onFileChange} />
             </div>
-          ) : (
-            <div className="glass-panel p-4 rounded-xl flex items-center justify-between mb-8 group overflow-hidden relative">
-              <div className="absolute inset-0 bg-gradient-to-r from-blue-500/10 to-purple-500/10 opacity-0 group-hover:opacity-100 transition-opacity" />
-              <div className="flex items-center gap-4 relative z-10">
-                <div className="p-3 bg-white/5 rounded-lg">
-                  <File className="w-6 h-6 text-blue-400" />
-                </div>
-                <div>
-                  <div className="text-sm font-medium text-white line-clamp-1">{fileName}</div>
-                  <div className="text-xs text-secondary mt-0.5 flex items-center gap-1">
-                    <CheckCircle2 className="w-3 h-3 text-green-400" /> Processed successfully
-                  </div>
-                </div>
-              </div>
-              <button
-                onClick={() => {
-                  setFileName("");
-                  setCurrentXmlData(null);
-                  setResults(null);
-                  setError(null);
-                }}
-                className="flex items-center gap-2 p-2 px-3 text-red-300 hover:text-red-400 hover:bg-red-400/10 rounded-lg transition-colors relative z-10 text-sm font-semibold"
-              >
-                <Trash2 className="w-4 h-4" />
-                Xóa file
-              </button>
-            </div>
-          )}
+          ) : null}
 
           {error && (
             <div className="mt-6 p-4 rounded-xl bg-red-500/10 border border-red-500/20 text-red-200 text-sm flex items-start gap-3">
@@ -657,294 +639,209 @@ export default function BoxCounterPage() {
           )}
 
           {currentXmlData && (
-            <div className="space-y-6 animate-in slide-in-from-bottom-4 fade-in duration-500 mt-8">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="glass-panel p-4 rounded-xl border border-white/5">
-                  <label className="text-xs font-semibold uppercase tracking-wider text-secondary mb-2 block">Start Frame</label>
-                  <input
-                    type="number"
-                    autoComplete="off"
-                    value={startFrame}
-                    onChange={(e) => {
-                      const val = parseInt(e.target.value);
-                      setStartFrame(isNaN(val) ? "" : val);
-                    }}
-                    onBlur={() => {
-                      if (!currentXmlData) return;
-                      if (startFrame === "" || (typeof startFrame === "number" && (startFrame < currentXmlData.minFrame || startFrame > currentXmlData.maxFrame))) {
-                        setStartFrame(currentXmlData.minFrame);
-                      }
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-                    }}
-                    className="w-full bg-transparent text-xl font-semibold text-white outline-none border-b border-white/10 focus:border-blue-500 transition-colors pb-2"
-                  />
-                </div>
-                <div className="glass-panel p-4 rounded-xl border border-white/5">
-                  <label className="text-xs font-semibold uppercase tracking-wider text-secondary mb-2 block">End Frame</label>
-                  <input
-                    type="number"
-                    autoComplete="off"
-                    value={endFrame}
-                    onChange={(e) => {
-                      const val = parseInt(e.target.value);
-                      setEndFrame(isNaN(val) ? "" : val);
-                    }}
-                    onBlur={() => {
-                      if (!currentXmlData) return;
-                      if (endFrame === "" || (typeof endFrame === "number" && (endFrame < currentXmlData.minFrame || endFrame > currentXmlData.maxFrame))) {
-                        setEndFrame(currentXmlData.maxFrame);
-                      }
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-                    }}
-                    className="w-full bg-transparent text-xl font-semibold text-white outline-none border-b border-white/10 focus:border-blue-500 transition-colors pb-2"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <button
-                  onClick={() => setShowExcludePanel(!showExcludePanel)}
-                  className="w-full flex items-center justify-between p-4 glass-panel rounded-xl hover:bg-white/5 transition-colors border border-white/5"
-                >
-                  <div className="flex items-center gap-2 text-sm font-semibold text-white">
-                    <Settings className="w-4 h-4 text-zinc-400" />
-                    Exclude Configuration
-                  </div>
-                  <ChevronDown className={cn("w-4 h-4 text-zinc-400 transition-transform", showExcludePanel && "rotate-180")} />
-                </button>
-
-                {showExcludePanel && (
-                  <div className="mt-2 glass-panel p-5 rounded-xl border border-white/5 animate-in slide-in-from-top-2 fade-in">
-                    <p className="text-xs text-secondary mb-3">Labels added here will be excluded from the final target count.</p>
-                    <div className="flex gap-2 mb-4">
-                      <input
-                        className="flex-1 px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-sm text-white focus:outline-none focus:border-blue-500 transition-colors"
-                        type="text"
-                        placeholder="e.g. _corrupt"
-                        value={newExcludeLabel}
-                        onChange={(e) => setNewExcludeLabel(e.target.value)}
-                        onKeyDown={(e) => e.key === "Enter" && handleAddExclude()}
-                      />
-                      <button
-                        className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold rounded-lg transition-colors shadow-lg shadow-blue-500/20"
-                        onClick={handleAddExclude}
-                      >
-                        Add
-                      </button>
+            <div className="animate-in slide-in-from-bottom-4 fade-in duration-500 space-y-6">
+              {/* TWO COLUMN LAYOUT */}
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                {/* Job Information */}
+                <div className="glass-panel p-4 rounded-xl border border-white/5 lg:col-span-12">
+                  <div className="flex items-center gap-3">
+                    <div className="flex min-w-0 flex-1 items-center gap-3">
+                      <h4 className="shrink-0 text-xs font-semibold uppercase tracking-[0.14em] text-secondary">Information</h4>
+                      <File className="h-4 w-4 shrink-0 text-blue-400" />
+                      <div className="min-w-0">
+                        <div className="truncate text-xs font-medium text-white/80">{fileName || "Processed file"}</div>
+                        <div className="mt-0.5 flex items-center gap-1 text-[10px] text-green-300/80">
+                          <CheckCircle2 className="h-3 w-3" />
+                          <span>Processed successfully</span>
+                        </div>
+                      </div>
                     </div>
-                    <div className="flex flex-wrap gap-2">
-                      {excludeLabels.map((lbl) => (
-                        <div key={lbl} className="px-3 py-1.5 bg-white/5 border border-white/10 rounded-md text-xs font-medium text-white flex items-center gap-2 group hover:bg-white/10 transition-colors">
-                          <span>{lbl}</span>
-                          <button onClick={() => handleRemoveExclude(lbl)} className="text-zinc-500 hover:text-white transition-colors">
-                            <Trash2 className="w-3 h-3" />
-                          </button>
+                    <div className="flex shrink-0 items-center gap-3">
+                      {currentXmlData.jobs.map(job => (
+                        <div key={job.id} className="flex items-center gap-4 rounded-lg border border-white/10 bg-white/5 p-2 px-4 shadow-sm">
+                          <span className="text-xs text-secondary">Job ID <span className="font-mono font-bold text-white">#{job.id}</span></span>
                         </div>
                       ))}
                     </div>
-                  </div>
-                )}
-              </div>
-
-              {results && (
-                <div className="glass-panel rounded-2xl border border-white/10 overflow-hidden relative">
-                  <div className="absolute top-0 inset-x-0 h-1 bg-gradient-to-r from-blue-500 to-purple-500" />
-
-                  <div className="p-6 sm:p-8">
-                    <h3 className="text-lg font-bold text-white mb-6">Statistic Overview</h3>
-
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-6 mb-8">
-                      <div>
-                        <div className="text-xs text-secondary font-medium uppercase tracking-wider mb-1">Included Frames</div>
-                        <div className="text-3xl font-extrabold text-white">{results.totalFrames}</div>
-                      </div>
-                      <div>
-                        <div className="text-xs text-secondary font-medium uppercase tracking-wider mb-1">Total Boxes</div>
-                        <div className="text-3xl font-extrabold text-blue-400">{results.totalBoxesCount}</div>
-                      </div>
-                      <div>
-                        <div className="text-xs text-secondary font-medium uppercase tracking-wider mb-1">Excluded</div>
-                        <div className="text-3xl font-extrabold text-purple-400">{results.excludeCount}</div>
-                      </div>
-                      <div>
-                        <div className="text-xs text-secondary font-medium uppercase tracking-wider mb-1">Final Count</div>
-                        <div className="text-3xl font-extrabold text-green-400">{results.totalAfterExclude}</div>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-4 text-sm mb-6 pb-6 border-b border-white/5">
-                      {results.framesWithSkipCount > 0 && (
-                        <div className="col-span-2 flex items-center justify-between p-3 rounded-lg bg-orange-500/10 border border-orange-500/20 text-orange-200 mb-2 shadow-inner">
-                          <span className="font-medium flex items-center gap-2">
-                            <AlertCircle className="w-4 h-4" />
-                            Frames Skipped/Passed
-                          </span>
-                          <span className="font-bold text-lg">{results.framesWithSkipCount}</span>
-                        </div>
-                      )}
-
-                      {results.duplicateCount > 0 && (
-                        <div className="col-span-2 flex items-center justify-between p-3 rounded-lg bg-orange-500/10 border border-orange-500/20 text-orange-200 mb-2 shadow-inner">
-                          <span className="font-medium flex items-center gap-2">
-                            <AlertCircle className="w-4 h-4" />
-                            Duplicate Boxes
-                          </span>
-                          <span className="font-bold text-lg">{results.duplicateCount}</span>
-                        </div>
-                      )}
-
-                      <div className="flex items-center justify-between p-3 rounded-lg bg-white/5">
-                        <span className="text-secondary">First Box ID</span>
-                        <span className="font-mono font-medium text-white">{results.firstBoxId}</span>
-                      </div>
-                      <div className="flex items-center justify-between p-3 rounded-lg bg-white/5">
-                        <span className="text-secondary">Last Box ID</span>
-                        <span className="font-mono font-medium text-white">{results.lastBoxId}</span>
-                      </div>
-                    </div>
-
-                    {duplicateDetails.length > 0 && (
-                      <button
-                        onClick={handleOpenDuplicateModal}
-                        className="w-full mb-4 px-4 py-3 bg-orange-500/10 hover:bg-orange-500/20 border border-orange-500/30 rounded-xl text-orange-300 font-semibold transition-colors text-sm uppercase tracking-widest"
-                      >
-                        View Duplicate Boxes ({duplicateDetails.length})
-                      </button>
-                    )}
-
-                    {isOpenDuplicateModal && duplicateDetails.length > 0 && (
-                      <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
-                        <div className="bg-gradient-to-br from-[#0f0f1f] to-[#1a1a2e] border border-white/10 rounded-2xl shadow-2xl max-w-2xl w-full max-h-[85vh] flex flex-col animate-in slide-in-from-bottom-4 fade-in">
-                          {/* Header */}
-                          <div className="flex items-center justify-between p-6 border-b border-white/10">
-                            <div className="flex items-center gap-3">
-                              <AlertCircle className="w-5 h-5 text-orange-400" />
-                              <h2 className="text-xl font-bold text-white">Duplicate Boxes</h2>
-                              <span className="ml-2 px-2.5 py-0.5 bg-orange-500/20 border border-orange-500/30 rounded-full text-sm font-semibold text-orange-300">
-                                {duplicateDetails.length} found
-                              </span>
-                            </div>
-                            <button
-                              onClick={handleCloseDuplicateModal}
-                              className="p-2 hover:bg-white/10 rounded-lg transition-colors"
-                              title="Close modal"
-                            >
-                              <svg className="w-5 h-5 text-zinc-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                              </svg>
-                            </button>
-                          </div>
-
-                          {/* Content */}
-                          <div className="overflow-y-auto flex-1">
-                            <div className="space-y-2 p-6">
-                              {duplicateDetails.map((item, idx) => (
-                                <div key={`${item.frameId}-${item.boxIdA}-${item.boxIdB}-${idx}`} className="p-4 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 hover:border-white/20 transition-all">
-                                  <div className="flex flex-wrap items-center gap-3 mb-2">
-                                    <span className="text-sm text-secondary font-medium">Frame</span>
-                                    <span className="px-2.5 py-1 rounded bg-blue-500/20 border border-blue-500/30 font-mono text-sm font-semibold text-blue-300">{item.frameId}</span>
-                                    <span className="text-secondary">•</span>
-                                    <span className="text-sm text-secondary font-medium">Box</span>
-                                    <span className="px-2.5 py-1 rounded bg-purple-500/20 border border-purple-500/30 font-mono text-sm font-semibold text-purple-300">{item.boxIdA}</span>
-                                    <span className="text-secondary font-semibold">vs</span>
-                                    <span className="px-2.5 py-1 rounded bg-purple-500/20 border border-purple-500/30 font-mono text-sm font-semibold text-purple-300">{item.boxIdB}</span>
-                                  </div>
-                                  <div className="text-sm text-white/80 space-y-2">
-                                    {item.labelA === item.labelB ? (
-                                      <div className="flex items-center gap-2">
-                                        <span className="font-semibold text-white">Label:</span>
-                                        <span className="px-2.5 py-1 rounded bg-orange-500/20 border border-orange-500/30 text-orange-300 font-medium">
-                                          {item.labelA || "unknown"}
-                                        </span>
-                                      </div>
-                                    ) : (
-                                      <div className="flex flex-wrap items-center gap-2">
-                                        <span className="font-semibold text-white">Label A:</span>
-                                        <span className="px-2.5 py-1 rounded bg-orange-500/20 border border-orange-500/30 text-orange-300 font-medium">
-                                          {item.labelA || "unknown"}
-                                        </span>
-                                        <span className="text-secondary">•</span>
-                                        <span className="font-semibold text-white">Label B:</span>
-                                        <span className="px-2.5 py-1 rounded bg-orange-500/20 border border-orange-500/30 text-orange-300 font-medium">
-                                          {item.labelB || "unknown"}
-                                        </span>
-                                      </div>
-                                    )}
-                                    {item.coords && (
-                                      <div className="flex flex-wrap items-center gap-2 pt-1">
-                                        <span className="font-semibold text-white text-xs">Vị trí:</span>
-                                        <span className="px-2.5 py-1 rounded bg-green-500/20 border border-green-500/30 text-green-300 font-medium text-xs">
-                                          {getBoxPosition(item.coords, item.width, item.height)}
-                                        </span>
-                                        <span className="text-secondary text-xs">•</span>
-                                        <span className="text-xs text-zinc-400 font-mono">
-                                          ({Math.round(item.coords.xtl)}, {Math.round(item.coords.ytl)}) - ({Math.round(item.coords.xbr)}, {Math.round(item.coords.ybr)})
-                                        </span>
-                                      </div>
-                                    )}
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-
-                          {/* Footer */}
-                          <div className="flex items-center justify-between p-6 border-t border-white/10 bg-black/40">
-                            <p className="text-xs text-secondary">Showing {duplicateDetails.length} duplicate pair(s)</p>
-                            <button
-                              onClick={handleCloseDuplicateModal}
-                              className="px-6 py-2 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-lg transition-colors shadow-lg shadow-blue-500/20"
-                            >
-                              Close
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
                     <button
-                      onClick={handleToggleBreakdown}
-                      className="group flex flex-col items-center justify-center w-full"
+                      onClick={() => {
+                        setFileName("");
+                        setCurrentXmlData(null);
+                        setResults(null);
+                        setError(null);
+                      }}
+                      className="flex shrink-0 items-center justify-center gap-1.5 rounded-lg p-1.5 px-2 text-xs font-semibold text-red-300 transition-colors hover:bg-red-400/10 hover:text-red-400"
                     >
-                      <div className="text-xs font-semibold uppercase tracking-widest text-secondary group-hover:text-white transition-colors flex items-center gap-2">
-                        {showDetails ? "Hide Breakdown" : "View Label Breakdown"}
-                        <ChevronDown className={cn("w-4 h-4 transition-transform", showDetails && "rotate-180")} />
-                      </div>
+                      <Trash2 className="h-3.5 w-3.5" />
+                      Xóa dữ liệu
                     </button>
-
-                    {showDetails && (
-                      <div className="mt-6 space-y-2 animate-in slide-in-from-top-4 fade-in">
-                        {labelDetails.map((item) => (
-                          <div key={item.label} className="flex justify-between items-center p-3 sm:p-4 rounded-xl bg-white/5 hover:bg-white/10 transition-colors border border-transparent hover:border-white/5 group">
-                            <span className="font-medium text-white flex items-center flex-wrap gap-2">
-                              {item.label}
-                            </span>
-                            <span className="text-xl font-bold font-mono text-zinc-300">{item.total}</span>
-                          </div>
-                        ))}
-                        {noBoxFramesCount > 0 && (
-                          <div className="flex justify-between items-center p-4 rounded-xl bg-red-500/5 border border-red-500/10 mt-4">
-                            <span className="font-medium text-red-300 flex items-center gap-2">
-                              <AlertCircle className="w-4 h-4" />
-                              Empty Frames
-                            </span>
-                            <span className="text-xl font-bold font-mono text-red-400">{noBoxFramesCount}</span>
-                          </div>
-                        )}
-                        {labelDetails.length === 0 && noBoxFramesCount === 0 && (
-                          <div className="text-center py-4 text-sm text-secondary">
-                            No label details found in the selected range.
-                          </div>
-                        )}
-                      </div>
-                    )}
                   </div>
                 </div>
-              )}
+
+                {/* LEFT PANEL - Config */}
+                <div className="lg:col-span-4 space-y-4">
+                  {/* Frame Range */}
+                  <div className="glass-panel p-4 rounded-xl border border-white/5">
+                    <h4 className="text-xs font-semibold uppercase tracking-wider text-secondary mb-3">Frame Range</h4>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-xs text-secondary/70 mb-1 block">Start</label>
+                        <input type="number" autoComplete="off" value={startFrame} onChange={(e) => { const val = parseInt(e.target.value); setStartFrame(isNaN(val) ? "" : val); }} onBlur={() => { if (!currentXmlData) return; if (startFrame === "" || (typeof startFrame === "number" && (startFrame < currentXmlData.minFrame || startFrame > currentXmlData.maxFrame))) { setStartFrame(currentXmlData.minFrame); } }} onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} className="w-full bg-transparent text-lg font-semibold text-white outline-none border-b border-white/10 focus:border-blue-500 transition-colors pb-1" />
+                      </div>
+                      <div>
+                        <label className="text-xs text-secondary/70 mb-1 block">End</label>
+                        <input type="number" autoComplete="off" value={endFrame} onChange={(e) => { const val = parseInt(e.target.value); setEndFrame(isNaN(val) ? "" : val); }} onBlur={() => { if (!currentXmlData) return; if (endFrame === "" || (typeof endFrame === "number" && (endFrame < currentXmlData.minFrame || endFrame > currentXmlData.maxFrame))) { setEndFrame(currentXmlData.maxFrame); } }} onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} className="w-full bg-transparent text-lg font-semibold text-white outline-none border-b border-white/10 focus:border-blue-500 transition-colors pb-1" />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Exclude Config */}
+                  <div className="glass-panel rounded-xl border border-white/5">
+                    <button onClick={() => setShowExcludePanel(!showExcludePanel)} className="w-full flex items-center justify-between p-4 hover:bg-white/5 transition-colors rounded-xl">
+                      <div className="flex items-center gap-2 text-sm font-semibold text-white">
+                        <Settings className="w-4 h-4 text-zinc-400" />
+                        Exclude Config
+                      </div>
+                      <ChevronDown className={cn("w-4 h-4 text-zinc-400 transition-transform", showExcludePanel && "rotate-180")} />
+                    </button>
+                    {showExcludePanel && (
+                      <div className="px-4 pb-4 animate-in slide-in-from-top-2 fade-in">
+                        <p className="text-xs text-secondary mb-3">Labels added here will be excluded from the final target count.</p>
+                        <div className="flex gap-2 mb-3">
+                          <input className="flex-1 px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-sm text-white focus:outline-none focus:border-blue-500 transition-colors" type="text" placeholder="e.g. _corrupt" value={newExcludeLabel} onChange={(e) => setNewExcludeLabel(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleAddExclude()} />
+                          <button className="px-3 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold rounded-lg transition-colors shadow-lg shadow-blue-500/20" onClick={handleAddExclude}>Add</button>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {excludeLabels.map((lbl) => (
+                            <div key={lbl} className="px-3 py-1.5 bg-white/5 border border-white/10 rounded-md text-xs font-medium text-white flex items-center gap-2 group hover:bg-white/10 transition-colors">
+                              <span>{lbl}</span>
+                              <button onClick={() => handleRemoveExclude(lbl)} className="text-zinc-500 hover:text-white transition-colors"><Trash2 className="w-3 h-3" /></button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                </div>
+
+                {/* RIGHT PANEL - Statistics + Duplicates */}
+                <div className="lg:col-span-8 space-y-6">
+                  {results ? (
+                    <div className="glass-panel rounded-2xl border border-white/10 overflow-hidden relative">
+                      <div className="absolute top-0 inset-x-0 h-1 bg-gradient-to-r from-blue-500 to-purple-500" />
+                      <div className="p-6 sm:p-8">
+                        <h3 className="text-lg font-bold text-white mb-6">Statistic Overview</h3>
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-6 mb-8">
+                          <div>
+                            <div className="text-xs text-secondary font-medium uppercase tracking-wider mb-1">Included Frames</div>
+                            <div className="text-3xl font-extrabold text-white">{results.totalFrames}</div>
+                          </div>
+                          <div>
+                            <div className="text-xs text-secondary font-medium uppercase tracking-wider mb-1">Total Boxes</div>
+                            <div className="text-3xl font-extrabold text-blue-400">{results.totalBoxesCount}</div>
+                          </div>
+                          <div>
+                            <div className="text-xs text-secondary font-medium uppercase tracking-wider mb-1">Excluded</div>
+                            <div className="text-3xl font-extrabold text-purple-400">{results.excludeCount}</div>
+                          </div>
+                          <div>
+                            <div className="text-xs text-secondary font-medium uppercase tracking-wider mb-1">Final Count</div>
+                            <div className="text-3xl font-extrabold text-green-400">{results.totalAfterExclude}</div>
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-4 text-sm mb-6 pb-6 border-b border-white/5">
+                          {results.framesWithSkipCount > 0 && (
+                            <div className="col-span-2 flex items-center justify-between p-3 rounded-lg bg-orange-500/10 border border-orange-500/20 text-orange-200 mb-2 shadow-inner">
+                              <span className="font-medium flex items-center gap-2"><AlertCircle className="w-4 h-4" />Frames Skipped/Passed</span>
+                              <span className="font-bold text-lg">{results.framesWithSkipCount}</span>
+                            </div>
+                          )}
+                          {results.duplicateCount > 0 && (
+                            <div className="col-span-2 flex items-center justify-between p-3 rounded-lg bg-orange-500/10 border border-orange-500/20 text-orange-200 mb-2 shadow-inner">
+                              <span className="font-medium flex items-center gap-2"><AlertCircle className="w-4 h-4" />Duplicate Boxes</span>
+                              <span className="font-bold text-lg">{results.duplicateCount}</span>
+                            </div>
+                          )}
+                          <div className="flex items-center justify-between p-3 rounded-lg bg-white/5">
+                            <span className="text-secondary">First Box ID</span>
+                            <span className="font-mono font-medium text-white">{results.firstBoxId}</span>
+                          </div>
+                          <div className="flex items-center justify-between p-3 rounded-lg bg-white/5">
+                            <span className="text-secondary">Last Box ID</span>
+                            <span className="font-mono font-medium text-white">{results.lastBoxId}</span>
+                          </div>
+                        </div>
+                        {duplicateDetails.length > 0 && (
+                          <button onClick={handleOpenDuplicateModal} className="w-full mb-4 px-4 py-3 bg-orange-500/10 hover:bg-orange-500/20 border border-orange-500/30 rounded-xl text-orange-300 font-semibold transition-colors text-sm uppercase tracking-widest">
+                            View Duplicate Boxes ({duplicateDetails.length})
+                          </button>
+                        )}
+                        {isOpenDuplicateModal && duplicateDetails.length > 0 && (
+                          <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
+                            <div className="bg-gradient-to-br from-[#0f0f1f] to-[#1a1a2e] border border-white/10 rounded-2xl shadow-2xl max-w-5xl w-full max-h-[85vh] flex flex-col animate-in slide-in-from-bottom-4 fade-in">
+                              <div className="flex items-center justify-between p-6 border-b border-white/10">
+                                <div className="flex items-center gap-3">
+                                  <AlertCircle className="w-5 h-5 text-orange-400" />
+                                  <h2 className="text-xl font-bold text-white">Duplicate Boxes</h2>
+                                  <span className="ml-2 px-2.5 py-0.5 bg-orange-500/20 border border-orange-500/30 rounded-full text-sm font-semibold text-orange-300">{duplicateDetails.length} found</span>
+                                </div>
+                                <button onClick={handleCloseDuplicateModal} className="p-2 hover:bg-white/10 rounded-lg transition-colors" title="Close modal">
+                                  <svg className="w-5 h-5 text-zinc-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                                </button>
+                              </div>
+                              <div className="overflow-y-auto flex-1">
+                                <div className="space-y-2 p-6">
+                                  {duplicateDetails.map((item, idx) => (
+                                    <div key={`${item.frameId}-${item.boxIdA}-${item.boxIdB}-${idx}`} className="p-4 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 hover:border-white/20 transition-all">
+                                      <div className="flex flex-wrap items-center gap-3 mb-2">
+                                        <span className="text-sm text-secondary font-medium">Frame</span>
+                                        <span className="px-2.5 py-1 rounded bg-blue-500/20 border border-blue-500/30 font-mono text-sm font-semibold text-blue-300">{item.frameId}</span>
+                                        <span className="text-secondary">•</span>
+                                        <span className="text-sm text-secondary font-medium">Box</span>
+                                        <span className="px-2.5 py-1 rounded bg-purple-500/20 border border-purple-500/30 font-mono text-sm font-semibold text-purple-300">{item.boxIdA}</span>
+                                        <span className="text-secondary font-semibold">vs</span>
+                                        <span className="px-2.5 py-1 rounded bg-purple-500/20 border border-purple-500/30 font-mono text-sm font-semibold text-purple-300">{item.boxIdB}</span>
+                                      </div>
+                                      <div className="text-sm text-white/80 space-y-2">
+                                        {item.labelA === item.labelB ? (
+                                          <div className="flex items-center gap-2"><span className="font-semibold text-white">Label:</span><span className="px-2.5 py-1 rounded bg-orange-500/20 border border-orange-500/30 text-orange-300 font-medium">{item.labelA || "unknown"}</span></div>
+                                        ) : (
+                                          <div className="flex flex-wrap items-center gap-2">
+                                            <span className="font-semibold text-white">Label A:</span><span className="px-2.5 py-1 rounded bg-orange-500/20 border border-orange-500/30 text-orange-300 font-medium">{item.labelA || "unknown"}</span>
+                                            <span className="text-secondary">•</span>
+                                            <span className="font-semibold text-white">Label B:</span><span className="px-2.5 py-1 rounded bg-orange-500/20 border border-orange-500/30 text-orange-300 font-medium">{item.labelB || "unknown"}</span>
+                                          </div>
+                                        )}
+                                        {item.coords && (
+                                          <div className="flex flex-wrap items-center gap-2 pt-1">
+                                            <span className="font-semibold text-white text-xs">Vị trí:</span>
+                                            <span className="px-2.5 py-1 rounded bg-green-500/20 border border-green-500/30 text-green-300 font-medium text-xs">{getBoxPosition(item.coords, item.width, item.height)}</span>
+                                            <span className="text-secondary text-xs">•</span>
+                                            <span className="text-xs text-zinc-400 font-mono">({Math.round(item.coords.xtl)}, {Math.round(item.coords.ytl)}) - ({Math.round(item.coords.xbr)}, {Math.round(item.coords.ybr)})</span>
+                                          </div>
+                                        )}
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                              <div className="flex items-center justify-between p-6 border-t border-white/10 bg-black/40">
+                                <p className="text-xs text-secondary">Showing {duplicateDetails.length} duplicate pair(s)</p>
+                                <button onClick={handleCloseDuplicateModal} className="px-6 py-2 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-lg transition-colors shadow-lg shadow-blue-500/20">Close</button>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="glass-panel rounded-2xl border border-white/10 p-12 text-center">
+                      <div className="text-secondary text-sm">Kết quả sẽ hiển thị ở đây khi bạn điều chỉnh cấu hình bên trái.</div>
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
           )}
         </div>
