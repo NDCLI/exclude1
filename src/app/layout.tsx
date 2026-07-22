@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
-import { CSPostHogProvider } from "./providers";
 
 const inter = Inter({ subsets: ["latin", "vietnamese"] });
 
@@ -18,9 +17,7 @@ export default function RootLayout({
   return (
     <html lang="vi">
       <body className={`${inter.className} antialiased`}>
-        <CSPostHogProvider>
-          {children}
-        </CSPostHogProvider>
+        {children}
       </body>
     </html>
   );

@@ -3,18 +3,18 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev -p 3000 -H 0.0.0.0",
+    "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"
   },
   "dependencies": {
-    "@zip.js/zip.js": "^2.8.26",
+    "@types/jszip": "^3.4.0",
     "clsx": "^2.1.1",
     "jszip": "^3.10.1",
     "lucide-react": "^0.575.0",
     "next": "16.1.6",
-    "posthog-js": "^1.399.1",
+    "posthog-js": "^1.405.3",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "tailwind-merge": "^3.5.0"
