@@ -18,28 +18,12 @@ function formatBoxId(value: number | string) {
   return String(value);
 }
 
-function isSameCoordinates(
-  a: { xtl: number; ytl: number; xbr: number; ybr: number },
-  b: { xtl: number; ytl: number; xbr: number; ybr: number },
-  epsilon = 1e-6
-) {
-  return (
-    Math.abs(a.xtl - b.xtl) <= epsilon &&
-    Math.abs(a.ytl - b.ytl) <= epsilon &&
-    Math.abs(a.xbr - b.xbr) <= epsilon &&
-    Math.abs(a.ybr - b.ybr) <= epsilon
-  );
-}
-
 interface ImageInfo {
   id: number;
   name: string;
-  width: number;
-  height: number;
   labelCounts: Record<string, number>;
   boxLabels: string[];
   boxIds: (number | null)[];
-  boxCoords: ({ xtl: number; ytl: number; xbr: number; ybr: number } | null)[];
   totalBoxes: number;
   exclBoxes: number;
   frameSkipBoxCount: number;
@@ -61,19 +45,6 @@ interface XmlData {
   images: ImageInfo[];
   jobs: JobInfo[];
 }
-
-interface DuplicatePairDetail {
-  frameId: number;
-  boxIdA: number | string;
-  boxIdB: number | string;
-  labelA: string;
-  labelB: string;
-  coords?: { xtl: number; ytl: number; xbr: number; ybr: number };
-  width?: number;
-  height?: number;
-}
-
-
 
 export default function BoxCounterPage() {
   const [currentXmlData, setCurrentXmlData] = useState<XmlData | null>(null);
@@ -97,54 +68,7 @@ export default function BoxCounterPage() {
     firstBoxId: number | string;
     lastBoxId: number | string;
     totalFrames: number;
-    duplicateCount: number;
   } | null>(null);
-
-  const [duplicateDetails, setDuplicateDetails] = useState<DuplicatePairDetail[]>([]);
-  const [isOpenDuplicateModal, setIsOpenDuplicateModal] = useState(false);
-
-  const handleOpenDuplicateModal = () => {
-    setIsOpenDuplicateModal(true);
-  };
-
-  const handleCloseDuplicateModal = () => {
-    setIsOpenDuplicateModal(false);
-  };
-
-  const getBoxPosition = (coords: { xtl: number; ytl: number; xbr: number; ybr: number }, width?: number, height?: number): string => {
-    const centerX = (coords.xtl + coords.xbr) / 2;
-    const centerY = (coords.ytl + coords.ybr) / 2;
-    
-    let posX = "";
-    let posY = "";
-    
-    if (width) {
-      const ratioX = centerX / width;
-      if (ratioX < 0.2) posX = "Trái";
-      else if (ratioX < 0.4) posX = "Gần trái";
-      else if (ratioX < 0.6) posX = "Giữa";
-      else if (ratioX < 0.8) posX = "Gần phải";
-      else posX = "Phải";
-    }
-    
-    if (height) {
-      const ratioY = centerY / height;
-      if (ratioY < 0.2) posY = "Trên";
-      else if (ratioY < 0.4) posY = "Gần trên";
-      else if (ratioY < 0.6) posY = "Giữa";
-      else if (ratioY < 0.8) posY = "Gần dưới";
-      else posY = "Dưới";
-    }
-    
-    if (posX && posY) {
-      if (posX === "Giữa" && posY === "Giữa") return "Trung tâm";
-      if (posX === "Giữa") return posY;
-      if (posY === "Giữa") return posX;
-      return `${posX} - ${posY}`;
-    }
-    
-    return posX || posY || "Trung tâm";
-  };
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -253,19 +177,6 @@ export default function BoxCounterPage() {
         return Number.isNaN(parsed) ? null : parsed;
       });
 
-      const boxCoords = boxes.map((b) => {
-        const xtl = parseFloat(b.getAttribute("xtl") || "");
-        const ytl = parseFloat(b.getAttribute("ytl") || "");
-        const xbr = parseFloat(b.getAttribute("xbr") || "");
-        const ybr = parseFloat(b.getAttribute("ybr") || "");
-
-        if ([xtl, ytl, xbr, ybr].some((n) => Number.isNaN(n))) {
-          return null;
-        }
-
-        return { xtl, ytl, xbr, ybr };
-      });
-
       const boxLabels = boxes.map((b) =>
         String(b.getAttribute("label") || b.getAttribute("label_name") || b.getAttribute("name") || "").trim()
       );
@@ -300,12 +211,9 @@ export default function BoxCounterPage() {
       return {
         id: parseInt(img.getAttribute("id") || String(imgIdx), 10),
         name: img.getAttribute("name") || "",
-        width: parseFloat(img.getAttribute("width") || "0"),
-        height: parseFloat(img.getAttribute("height") || "0"),
         labelCounts: counts,
         boxLabels,
         boxIds: boxIds,
-        boxCoords,
         totalBoxes: boxes.length,
         exclBoxes: boxLabels.filter((l) => String(l).toLowerCase() === "_excl_area").length,
         frameSkipBoxCount,
@@ -412,9 +320,7 @@ export default function BoxCounterPage() {
     setFileName("");
     setCurrentXmlData(null);
     setResults(null);
-    setDuplicateDetails([]);
     setError(null);
-    setIsOpenDuplicateModal(false);
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
@@ -471,53 +377,6 @@ export default function BoxCounterPage() {
     const firstBoxId = allBoxIds.length > 0 ? allBoxIds.reduce((min, id) => (id < min ? id : min), allBoxIds[0]) : "—";
     const lastBoxId = allBoxIds.length > 0 ? allBoxIds.reduce((max, id) => (id > max ? id : max), allBoxIds[0]) : "—";
 
-    let duplicateCount = 0;
-    const duplicatePairs: DuplicatePairDetail[] = [];
-    const seenSameLabelGroups = new Set<string>();
-
-    filteredImages.forEach((img) => {
-      const validBoxes = img.boxCoords
-        .map((coord, idx) => {
-          if (!coord) return null;
-          return { coord, idx };
-        })
-        .filter((x): x is { coord: { xtl: number; ytl: number; xbr: number; ybr: number }; idx: number } => x !== null);
-
-      for (let i = 0; i < validBoxes.length; i++) {
-        for (let j = i + 1; j < validBoxes.length; j++) {
-          const first = validBoxes[i].coord;
-          const second = validBoxes[j].coord;
-
-          const firstIdx = validBoxes[i].idx;
-          const secondIdx = validBoxes[j].idx;
-          const boxIdA = img.boxIds[firstIdx] ?? `index:${firstIdx + 1}`;
-          const boxIdB = img.boxIds[secondIdx] ?? `index:${secondIdx + 1}`;
-          const labelA = img.boxLabels[firstIdx] || "unknown";
-          const labelB = img.boxLabels[secondIdx] || "unknown";
-
-          if (!isSameCoordinates(first, second)) continue;
-
-          if (labelA === labelB) {
-            const groupKey = `${img.id}|${labelA}|${first.xtl}|${first.ytl}|${first.xbr}|${first.ybr}`;
-            if (seenSameLabelGroups.has(groupKey)) continue;
-            seenSameLabelGroups.add(groupKey);
-          }
-
-          duplicateCount++;
-          duplicatePairs.push({
-            frameId: img.id,
-            boxIdA,
-            boxIdB,
-            labelA,
-            labelB,
-            coords: first,
-            width: img.width,
-            height: img.height,
-          });
-        }
-      }
-    });
-
     setResults({
       excludeCount: combinedExcludeCount,
       totalBoxesCount,
@@ -527,9 +386,7 @@ export default function BoxCounterPage() {
       firstBoxId,
       lastBoxId,
       totalFrames: filteredImages.length, // Only frames in range
-      duplicateCount,
     });
-    setDuplicateDetails(duplicatePairs);
   }, [currentXmlData, startFrame, endFrame, excludeLabels]);
 
   useEffect(() => {
@@ -853,40 +710,6 @@ export default function BoxCounterPage() {
                     )}
                   </section>
 
-                  <section className="glass-panel rounded-xl border border-white/5 p-4 sm:p-5">
-                    <div className="mb-4 flex items-center justify-between gap-3">
-                      <div className="flex items-center gap-2">
-                        <Layers3 className="h-4 w-4 text-blue-400" />
-                        <h2 className="text-xs font-semibold uppercase tracking-wider text-secondary">Range Summary</h2>
-                      </div>
-                      <span className="font-mono text-[11px] text-white/50">{rangeStart}–{rangeEnd}</span>
-                    </div>
-
-                    <div className="space-y-3 text-sm">
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="text-secondary">Selected Frames</span>
-                        <span className="font-bold text-white">{formatNumber(selectedFrameCount)}</span>
-                      </div>
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="text-secondary">Frames with Boxes</span>
-                        <span className="font-bold text-blue-300">{formatNumber(results?.framesWithBoxesCount ?? 0)}</span>
-                      </div>
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="text-secondary">Skipped / Passed</span>
-                        <span className="font-bold text-amber-300">{formatNumber(results?.framesWithSkipCount ?? 0)}</span>
-                      </div>
-                    </div>
-
-                    <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-white/5">
-                      <div
-                        className="h-full rounded-full bg-gradient-to-r from-blue-500 to-purple-500 transition-[width] duration-300"
-                        style={{ width: `${selectedRangePercent}%` }}
-                      />
-                    </div>
-                    <p className="mt-2 text-[10px] leading-4 text-secondary/60">
-                      {selectedRangePercent.toFixed(selectedRangePercent >= 10 ? 0 : 1)}% of available frames selected
-                    </p>
-                  </section>
                 </aside>
 
                 <section className="min-w-0 lg:col-span-8">
@@ -956,26 +779,40 @@ export default function BoxCounterPage() {
                           </div>
                         </div>
 
-                        {results.duplicateCount > 0 && (
-                          <div className="mt-4 flex flex-col gap-3 rounded-xl border border-orange-400/20 bg-orange-400/[0.08] p-4 text-orange-100 sm:flex-row sm:items-center sm:justify-between">
-                            <div className="flex min-w-0 items-start gap-3">
-                              <span className="mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-orange-400/10">
-                                <AlertCircle className="h-4 w-4 text-orange-300" />
-                              </span>
-                              <div>
-                                <div className="text-sm font-semibold">Duplicate Boxes</div>
-                                <div className="mt-0.5 text-xs text-orange-100/55">Review boxes sharing the same coordinates</div>
-                              </div>
+                        <div className="mt-4 border-t border-white/[0.07] pt-4">
+                          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex items-center gap-2">
+                              <Layers3 className="h-4 w-4 text-blue-400" />
+                              <h3 className="text-[10px] font-semibold uppercase tracking-[0.14em] text-secondary">Range Summary</h3>
                             </div>
-                            <button
-                              type="button"
-                              onClick={handleOpenDuplicateModal}
-                              className="inline-flex min-h-9 items-center justify-center rounded-lg border border-orange-300/20 bg-orange-300/10 px-3 py-2 text-xs font-semibold text-orange-200 transition-colors hover:bg-orange-300/20"
-                            >
-                              View {formatNumber(results.duplicateCount)} boxes
-                            </button>
+                            <span className="font-mono text-[11px] text-white/50">{rangeStart}–{rangeEnd}</span>
                           </div>
-                        )}
+
+                          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                            <div className="rounded-xl border border-white/[0.07] bg-white/[0.035] px-4 py-3">
+                              <div className="text-[11px] font-medium text-secondary">Selected Frames</div>
+                              <div className="mt-1 text-lg font-bold tabular-nums text-white">{formatNumber(selectedFrameCount)}</div>
+                            </div>
+                            <div className="rounded-xl border border-blue-400/10 bg-blue-400/[0.04] px-4 py-3">
+                              <div className="text-[11px] font-medium text-secondary">Frames with Boxes</div>
+                              <div className="mt-1 text-lg font-bold tabular-nums text-blue-300">{formatNumber(results.framesWithBoxesCount)}</div>
+                            </div>
+                            <div className="rounded-xl border border-amber-400/15 bg-amber-400/[0.06] px-4 py-3">
+                              <div className="text-[11px] font-medium text-secondary">Skipped / Passed</div>
+                              <div className="mt-1 text-lg font-bold tabular-nums text-amber-300">{formatNumber(results.framesWithSkipCount)}</div>
+                            </div>
+                          </div>
+
+                          <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/5">
+                            <div
+                              className="h-full rounded-full bg-gradient-to-r from-blue-500 to-purple-500 transition-[width] duration-300"
+                              style={{ width: `${selectedRangePercent}%` }}
+                            />
+                          </div>
+                          <p className="mt-2 text-[10px] leading-4 text-secondary/60">
+                            {selectedRangePercent.toFixed(selectedRangePercent >= 10 ? 0 : 1)}% of available frames selected
+                          </p>
+                        </div>
                       </div>
                     </div>
                   ) : (
@@ -985,93 +822,6 @@ export default function BoxCounterPage() {
                   )}
                 </section>
               </div>
-
-              {isOpenDuplicateModal && duplicateDetails.length > 0 && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-3 backdrop-blur-sm animate-in fade-in sm:p-5">
-                  <div className="flex max-h-[88vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-white/10 bg-gradient-to-br from-[#0f0f1f] to-[#1a1a2e] shadow-2xl animate-in fade-in slide-in-from-bottom-4">
-                    <div className="flex items-start justify-between gap-4 border-b border-white/10 p-4 sm:items-center sm:p-6">
-                      <div className="flex min-w-0 flex-wrap items-center gap-2 sm:gap-3">
-                        <AlertCircle className="h-5 w-5 shrink-0 text-orange-400" />
-                        <h2 className="text-lg font-bold text-white sm:text-xl">Duplicate Boxes</h2>
-                        <span className="rounded-full border border-orange-500/30 bg-orange-500/20 px-2.5 py-0.5 text-xs font-semibold text-orange-300 sm:text-sm">
-                          {duplicateDetails.length} found
-                        </span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={handleCloseDuplicateModal}
-                        className="shrink-0 rounded-lg p-2 transition-colors hover:bg-white/10"
-                        title="Close modal"
-                        aria-label="Close duplicate boxes modal"
-                      >
-                        <X className="h-5 w-5 text-zinc-400" />
-                      </button>
-                    </div>
-
-                    <div className="flex-1 overflow-y-auto">
-                      <div className="space-y-2 p-3 sm:p-6">
-                        {duplicateDetails.map((item, idx) => (
-                          <div
-                            key={`${item.frameId}-${item.boxIdA}-${item.boxIdB}-${idx}`}
-                            className="rounded-xl border border-white/10 bg-white/5 p-4 transition-all hover:border-white/20 hover:bg-white/10"
-                          >
-                            <div className="mb-2 flex flex-wrap items-center gap-2 sm:gap-3">
-                              <span className="text-sm font-medium text-secondary">Frame</span>
-                              <span className="rounded border border-blue-500/30 bg-blue-500/20 px-2.5 py-1 font-mono text-sm font-semibold text-blue-300">{item.frameId}</span>
-                              <span className="text-secondary">•</span>
-                              <span className="text-sm font-medium text-secondary">Box</span>
-                              <span className="rounded border border-purple-500/30 bg-purple-500/20 px-2.5 py-1 font-mono text-sm font-semibold text-purple-300">{item.boxIdA}</span>
-                              <span className="font-semibold text-secondary">vs</span>
-                              <span className="rounded border border-purple-500/30 bg-purple-500/20 px-2.5 py-1 font-mono text-sm font-semibold text-purple-300">{item.boxIdB}</span>
-                            </div>
-
-                            <div className="space-y-2 text-sm text-white/80">
-                              {item.labelA === item.labelB ? (
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <span className="font-semibold text-white">Label:</span>
-                                  <span className="rounded border border-orange-500/30 bg-orange-500/20 px-2.5 py-1 font-medium text-orange-300">{item.labelA || "unknown"}</span>
-                                </div>
-                              ) : (
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <span className="font-semibold text-white">Label A:</span>
-                                  <span className="rounded border border-orange-500/30 bg-orange-500/20 px-2.5 py-1 font-medium text-orange-300">{item.labelA || "unknown"}</span>
-                                  <span className="text-secondary">•</span>
-                                  <span className="font-semibold text-white">Label B:</span>
-                                  <span className="rounded border border-orange-500/30 bg-orange-500/20 px-2.5 py-1 font-medium text-orange-300">{item.labelB || "unknown"}</span>
-                                </div>
-                              )}
-
-                              {item.coords && (
-                                <div className="flex flex-wrap items-center gap-2 pt-1">
-                                  <span className="text-xs font-semibold text-white">Vị trí:</span>
-                                  <span className="rounded border border-green-500/30 bg-green-500/20 px-2.5 py-1 text-xs font-medium text-green-300">
-                                    {getBoxPosition(item.coords, item.width, item.height)}
-                                  </span>
-                                  <span className="text-xs text-secondary">•</span>
-                                  <span className="break-all font-mono text-xs text-zinc-400">
-                                    ({Math.round(item.coords.xtl)}, {Math.round(item.coords.ytl)}) - ({Math.round(item.coords.xbr)}, {Math.round(item.coords.ybr)})
-                                  </span>
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="flex flex-col gap-3 border-t border-white/10 bg-black/40 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-6">
-                      <p className="text-xs text-secondary">Showing {duplicateDetails.length} duplicate pair(s)</p>
-                      <button
-                        type="button"
-                        onClick={handleCloseDuplicateModal}
-                        className="min-h-10 rounded-lg bg-blue-600 px-6 py-2 text-sm font-semibold text-white shadow-lg shadow-blue-500/20 transition-colors hover:bg-blue-500"
-                      >
-                        Close
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              )}
             </div>
           )}
         </main>
